@@ -1,0 +1,162 @@
+---
+title: "Bayesian MCMC Workshop: A Minimal Working Example"
+format: 
+  revealjs:
+    embed-resources: TRUE
+editor: visual
+---
+
+## Goal
+
+The goal of this minimal working example is to work through the fitting of a distribution model via MCMC.
+
+## The True Distribution
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+easyr::begin() # An open source library created by my Oliver Wyman colleague Bryce Chamberlain
+
+exp(10.5 + 1.5^2/2) #mean
+exp(10.5 + 1.5^2/2) * sqrt(exp(1.5^2) - 1) #sd
+# https://homepage.divms.uiowa.edu/~mbognar/applets/lognormal.html
+# true mean = 112e3, sd = 326e3
+```
+
+## Generate Sample Data
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+# Simulate Claims ---------------------------------------------------------
+
+set.seed(12345)
+claims <- rlnorm(n = 500, meanlog = 10.5, sdlog = 1.5)
+mean(claims); sd(claims)
+
+# true mean = 112e3, sd = 326e3
+# sample mean = 118e3 sd = 237e3 
+```
+
+## Fitting via MLE (Frequentist)
+
+```{r echo=TRUE}
+mu <- claims |> log() |> mean()
+sigma <- claims |> log() |> sd()
+exp(mu + sigma^2/2) #mean
+exp(mu + sigma^2/2) * sqrt(exp(sigma^2) - 1) #sd
+
+# true mean = 112e3, sd = 326e3
+# sample mean = 118e3 sd = 237e3 
+# mle mean = 123e3 sd = 351e3 # compare to true values
+```
+
+## Fitting via MCMC (Bayesian)
+
+```{r echo = TRUE}
+?rstan::stan
+# file; model_name; data; pars; iter; warmup; chains; thin; init; seed; 
+# sample_file; diagnostic_file
+```
+
+## Writing the Stan Script
+
+-   RStudio: File - New - Stan File
+
+```         
+// The input data is a vector 'y' of length 'N'.
+data {
+int<lower=0> N;
+vector[N] y;
+}
+
+// The parameters accepted by the model. Our model
+// accepts two parameters 'mu' and 'sigma'.
+parameters {
+real mu;
+real<lower=0> sigma;
+}
+```
+
+## Writing the Stan Script
+
+-   RStudio: File - New - Stan File
+
+```         
+// The model to be estimated. We model the output
+// 'y' to be lognormally distributed with mean 'mu'
+// and standard deviation 'sigma'.
+
+model {
+//prior for mu
+mu ~ normal(10, 3); 
+// prior for sigma
+sigma ~ gamma(1.25, 2); 
+// the likelihood
+y ~ lognormal(mu, sigma);
+}
+```
+
+## Fitting the Model
+
+```{r echo=TRUE}
+fit <- rstan::stan(file = 'lognormal.stan', model_name = 'clrs_ws_2023', 
+  data = list(y = claims, N = length(claims)), chains = 3, iter = 5000, 
+  warmup = 1000, seed = 2023, init = list(
+    list(mu = 7, sigma = 1), # Chain 1
+    list(mu = 7, sigma = 1), # Chain 2
+    list(mu = 7, sigma = 1)),# Chain 3
+  sample_file = ('samples'), diagnostic_file = ('diagnostics'))
+```
+
+## Reviewing the Results (Part 1)
+
+```{r}
+fit
+```
+
+## Reviewing the Results (Part 2)
+
+```{r}
+str(fit)
+```
+
+## Visual Diagnostics (Part 1)
+
+```{r}
+plot(y = fit@sim$samples[[1]]$mu, x = 1:5000, type = 'n')
+lapply(X = 1:3, FUN = function(this_chain){
+  points(y = fit@sim$samples[[1]]$mu[1:1000], x = 1:1000, type = 'l', 
+  col = 'gray80')
+  points(y = fit@sim$samples[[1]]$mu[1001:5000], x = 1001:5000, type = 'l', 
+    col = c('red', 'blue', 'green')[this_chain])})
+```
+
+## Visual Diagnostics (Part 2)
+
+```{r}
+plot(y = fit@sim$samples[[1]]$mu, x = 1:5000, type = 'n', 
+  ylim = c(10.4, 10.9))
+lapply(X = 1:3, FUN = function(this_chain){
+  points(y = fit@sim$samples[[1]]$mu[1:1000], x = 1:1000, type = 'l', 
+  col = 'gray80')
+  points(y = fit@sim$samples[[1]]$mu[1001:5000], x = 1001:5000, type = 'l', 
+    col = c('red', 'blue', 'green')[this_chain])}) |> invisible()
+```
+
+## Parameter Risk
+
+```{r}
+params <- rstan::extract(object = fit, pars = c('mu', 'sigma'))
+str(params)
+plot(x = params$mu, y = params$sigma)
+points(x = 10.5, y = 1.5, pch = 'X', col = 'red')
+points(x = mu, y = sigma, pch = 'X', col = 'blue')
+```
+
+## Modeling
+
+```{r echo=TRUE}
+par(mfrow = c(3, 1))
+set.seed(12345)
+claims |> log() |> hist(main = 'Sample')
+rlnorm(n = 12e3, meanlog = 10.5, sdlog = 1.5) |>  log() |> hist(main = 'MLE')
+rlnorm(n = 12e3, meanlog = params$mu, sdlog = params$sigma) |>  log() |> hist(main = 'MCMC')
+```
